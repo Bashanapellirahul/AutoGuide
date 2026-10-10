@@ -9,6 +9,7 @@ Chunk format expected from the chunking stage (one dict per chunk):
 """
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -17,13 +18,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from rank_bm25 import BM25Okapi
+from rag.config import CHUNKS_DIR, PROCESSED_DIR, DB_PATH, EMBEDDING_MODEL, COLLECTION_NAME
+from rag.vector_store import VectorStore, flat_metadata
 
 load_dotenv()
 
-CHUNKS_DIR = Path("data/chunks")
 PROCESSED_DIRS = [
-    Path("data/processed"),
-    Path("data/processed/api")
+    PROCESSED_DIR,
+    PROCESSED_DIR / "api",
+    PROCESSED_DIR / "features"
 ]
 
 EMBEDDING_MODEL = os.getenv(
@@ -31,10 +34,7 @@ EMBEDDING_MODEL = os.getenv(
     "sentence-transformers/all-MiniLM-L6-v2"
 )
 
-CHROMA_DB_PATH = os.getenv(
-    "CHROMA_DB_PATH",
-    "data/chroma_db"
-)
+CHROMA_DB_PATH = DB_PATH
 
 COLLECTION_NAME = os.getenv(
     "CHROMA_COLLECTION",
@@ -73,6 +73,8 @@ def normalize_chunk(record):
         or record.get("chunk_id")
         or record.get("doc_id")
     )
+    if not chunk_id:
+        chunk_id = hashlib.sha256((record.get("text", "") + record.get("url", record.get("source_url", ""))).encode()).hexdigest()[:24]
 
     return {
         **record,
@@ -111,6 +113,11 @@ def load_chunks(chunks_dir=CHUNKS_DIR):
         directories = PROCESSED_DIRS
 
     chunks = []
+
+    active_file = Path(chunks_dir) / "chunks.jsonl"
+    if active_file.exists():
+        return [normalize_chunk(record) for record in read_records(active_file)
+                if record.get("text", "").strip()]
 
     for directory in directories:
         for file_path in sorted(directory.glob("*.json*")):
@@ -152,6 +159,7 @@ class BM25Retriever:
             tokenize(f"{chunk['title']} {chunk['text']}")
             for chunk in chunks
         ]
+        self.token_sets = [set(tokens) for tokens in corpus]
 
         self.bm25 = BM25Okapi(corpus)
 
@@ -163,6 +171,11 @@ class BM25Retriever:
             return []
 
         scores = self.bm25.get_scores(query_tokens)
+        # BM25 IDF can be non-positive in a small corpus. Preserve real
+        # keyword matches instead of treating them as an empty result.
+        scores = [max(float(score), 0.0001 * sum(token in self.token_sets[i]
+                                               for token in query_tokens))
+                  for i, score in enumerate(scores)]
 
         ranked = sorted(
             range(len(scores)),
@@ -183,102 +196,17 @@ class BM25Retriever:
 
 def chroma_metadata(chunk):
     """ChromaDB metadata must be flat str/int/float/bool values."""
-
-    metadata = {}
-
-    for key, value in chunk.items():
-
-        if key in ("id", "text"):
-            continue
-
-        if isinstance(value, (str, int, float, bool)):
-            metadata[key] = value
-
-        elif isinstance(value, dict):
-            for sub_key, sub_value in value.items():
-                if isinstance(sub_value, (str, int, float, bool)):
-                    metadata[f"{key}_{sub_key}"] = sub_value
-
-    return metadata
+    return flat_metadata(chunk)
 
 
-class DenseRetriever:
-
-    def __init__(self, chunks, db_path=CHROMA_DB_PATH):
-        import chromadb
-        from sentence_transformers import SentenceTransformer
-
-        self.model = SentenceTransformer(EMBEDDING_MODEL)
-
-        client = chromadb.PersistentClient(path=str(db_path))
-
-        self.collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"}
-        )
-
-        self.index_missing(chunks)
+class DenseRetriever(VectorStore):
+    """Compatibility interface backed by the shared persistent index."""
 
     def embed(self, texts):
-        # L2-normalized so cosine similarity == dot product.
-        return self.model.encode(
-            texts,
-            normalize_embeddings=True,
-            show_progress_bar=False
-        ).tolist()
+        return self.encoder.encode(texts)
 
     def index_missing(self, chunks, batch_size=64):
-        """Add chunks that are not in ChromaDB yet.
-
-        If the chunking stage already built the collection, this
-        does nothing.
-        """
-
-        existing = set(self.collection.get(include=[])["ids"])
-
-        missing = [
-            chunk
-            for chunk in chunks
-            if chunk["id"] not in existing
-        ]
-
-        for start in range(0, len(missing), batch_size):
-            batch = missing[start:start + batch_size]
-
-            self.collection.add(
-                ids=[chunk["id"] for chunk in batch],
-                documents=[chunk["text"] for chunk in batch],
-                embeddings=self.embed([
-                    f"{chunk['title']}\n{chunk['text']}"
-                    for chunk in batch
-                ]),
-                metadatas=[chroma_metadata(chunk) for chunk in batch]
-            )
-
-        if missing:
-            print(f"Indexed {len(missing)} new chunks in ChromaDB.")
-
-    def search(self, query, k=PER_RETRIEVER_K):
-
-        count = self.collection.count()
-
-        if count == 0:
-            return []
-
-        result = self.collection.query(
-            query_embeddings=self.embed([query]),
-            n_results=min(k, count),
-            include=["distances"]
-        )
-
-        # Chroma returns cosine distance; similarity = 1 - distance.
-        return [
-            (chunk_id, 1.0 - float(distance))
-            for chunk_id, distance in zip(
-                result["ids"][0],
-                result["distances"][0]
-            )
-        ]
+        return self.sync(chunks, batch_size)
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +235,7 @@ def reciprocal_rank_fusion(ranked_lists, k=RRF_K):
 
 class HybridRetriever:
 
-    def __init__(self, chunks=None, reranker=None):
+    def __init__(self, chunks=None, reranker=None, enable_dense=True):
 
         self.chunks = chunks if chunks is not None else load_chunks()
 
@@ -319,10 +247,19 @@ class HybridRetriever:
         self.by_id = {chunk["id"]: chunk for chunk in self.chunks}
 
         self.bm25 = BM25Retriever(self.chunks)
-        self.dense = DenseRetriever(self.chunks)
+        self.dense = None
+        self.warning = None
+        if enable_dense:
+            try:
+                from rag.vector_store import VectorStore
+                self.dense = VectorStore(self.chunks)
+            except Exception as error:
+                self.warning = f"Semantic search unavailable ({type(error).__name__}). Using keyword search."
+                import logging
+                logging.getLogger(__name__).exception("Semantic index initialization failed")
         self.reranker = reranker
 
-    def candidates(self, query, mode="hybrid", k=CANDIDATE_K):
+    def candidates(self, query, mode="hybrid", k=CANDIDATE_K, vehicle_filter=None):
         """Return top-k candidates before reranking, with a trace.
 
         mode: "bm25" (baseline B1), "dense" (B2) or "hybrid" (B3).
@@ -330,12 +267,27 @@ class HybridRetriever:
 
         bm25_results = []
         dense_results = []
+        if mode not in {"bm25", "dense", "hybrid"}:
+            raise ValueError("Unknown retrieval mode.")
+        if mode == "dense" and self.dense is None:
+            raise ValueError("Semantic search is not available.")
+        if mode == "hybrid" and self.dense is None:
+            mode = "bm25"
+        search_k = len(self.chunks) if vehicle_filter else PER_RETRIEVER_K
 
         if mode in ("bm25", "hybrid"):
-            bm25_results = self.bm25.search(query)
+            bm25_results = self.bm25.search(query, k=search_k)
 
         if mode in ("dense", "hybrid"):
-            dense_results = self.dense.search(query)
+            dense_results = self.dense.search(query, k=search_k)
+
+        if vehicle_filter:
+            def matches(item):
+                vehicle = self.by_id.get(item[0], {}).get("vehicle", {})
+                return all(str(vehicle.get(key, "")).casefold() == str(value).casefold()
+                           for key, value in vehicle_filter.items() if value not in (None, ""))
+            bm25_results = [item for item in bm25_results if matches(item)]
+            dense_results = [item for item in dense_results if matches(item)]
 
         if mode == "bm25":
             ranked = bm25_results
@@ -385,7 +337,7 @@ class HybridRetriever:
         return results
 
     def retrieve(self, query, top_k=FINAL_K, mode="hybrid",
-                 candidate_k=CANDIDATE_K, rerank=True):
+                 candidate_k=CANDIDATE_K, rerank=True, vehicle_filter=None):
         """Main entry point for the chatbot.
 
         Returns the top_k chunks, best first. Each result keeps its
@@ -394,7 +346,7 @@ class HybridRetriever:
 
         start = time.perf_counter()
 
-        candidates = self.candidates(query, mode=mode, k=candidate_k)
+        candidates = self.candidates(query, mode=mode, k=candidate_k, vehicle_filter=vehicle_filter)
 
         retrieval_ms = (time.perf_counter() - start) * 1000
 

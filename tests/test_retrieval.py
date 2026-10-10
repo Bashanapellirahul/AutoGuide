@@ -83,3 +83,9 @@ def test_chroma_metadata_flattens_nested_values():
         "vehicle_make": "Honda",
         "vehicle_year": 2020
     }
+
+
+def test_small_corpus_common_term_still_matches():
+    chunks = [normalize_chunk({"id": "a", "text": "recall brake", "title": "recall"}),
+              normalize_chunk({"id": "b", "text": "recall airbag", "title": "recall"})]
+    assert len(BM25Retriever(chunks).search("recall")) == 2
