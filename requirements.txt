@@ -1,0 +1,17 @@
+streamlit
+openai
+chromadb
+sentence-transformers
+rank-bm25
+langchain-text-splitters
+beautifulsoup4
+requests
+pymupdf
+pdfplumber
+pandas
+numpy
+scikit-learn
+python-dotenv
+tiktoken
+lxml
+pytest
