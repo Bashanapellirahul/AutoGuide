@@ -16,6 +16,8 @@ data/raw/
 data/processed/
 data/chunks/
 data/chroma_db/
+data/evaluation/
+.pytest_cache/
 
 # macOS
 .DS_Store

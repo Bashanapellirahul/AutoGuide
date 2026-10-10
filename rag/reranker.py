@@ -27,7 +27,10 @@ class CrossEncoderReranker:
     def __init__(self, model_name=RERANKER_MODEL):
         from sentence_transformers import CrossEncoder
 
-        self.model = CrossEncoder(model_name, max_length=MAX_LENGTH)
+        try:
+            self.model = CrossEncoder(model_name, max_length=MAX_LENGTH, local_files_only=True)
+        except OSError:
+            self.model = CrossEncoder(model_name, max_length=MAX_LENGTH)
 
     def rerank(self, query, candidates, top_k=5):
         """Score each (query, chunk) pair and return the best top_k.

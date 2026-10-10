@@ -3,10 +3,11 @@ import json
 from pathlib import Path
 
 from ingestion.cleaner import clean_text
+from rag.config import DATA_DIR, PROCESSED_DIR
 
 
-RAW_API_DIR = Path("data/raw/api")
-PROCESSED_API_DIR = Path("data/processed/api")
+RAW_API_DIR = DATA_DIR / "raw" / "api"
+PROCESSED_API_DIR = PROCESSED_DIR / "api"
 
 PROCESSED_API_DIR.mkdir(
     parents=True,
@@ -81,6 +82,9 @@ def normalize_recall(record, source_url, vehicle):
         "url": source_url,
         "source_type": "nhtsa_recalls_api",
         "campaign_number": campaign_number,
+        "recall_summary": clean_text(summary),
+        "safety_consequence": clean_text(consequence),
+        "recommended_remedy": clean_text(remedy),
         "vehicle": {
             "make": make,
             "model": model,
@@ -119,6 +123,7 @@ def process_api_documents():
         vehicle = data.get("vehicle", {})
 
         records = data.get("records", [])
+        current_ids = set()
 
         for record in records:
 
@@ -127,6 +132,9 @@ def process_api_documents():
                 source_url,
                 vehicle
             )
+            document["retrieved_at"] = data.get("retrieved_at", "")
+            document["publication_date"] = record.get("ReportReceivedDate", "")
+            current_ids.add(document["id"])
 
             output_file = (
                 PROCESSED_API_DIR /
@@ -143,6 +151,15 @@ def process_api_documents():
             )
 
             processed_count += 1
+
+        # Remove obsolete normalized records only for this successfully
+        # captured vehicle response. Other vehicles/sources are retained.
+        expected_vehicle = {k: str(v).casefold() for k, v in vehicle.items()}
+        for old_path in PROCESSED_API_DIR.glob("*.json"):
+            old_document = json.loads(old_path.read_text(encoding="utf-8"))
+            old_vehicle = {k: str(v).casefold() for k, v in old_document.get("vehicle", {}).items()}
+            if old_vehicle == expected_vehicle and old_document.get("id") not in current_ids:
+                old_path.unlink()
 
         print(
             f"Processed {len(records)} recalls "

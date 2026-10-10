@@ -1,16 +1,18 @@
 import hashlib
 import json
+import re
 import time
 
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from rag.config import DATA_DIR
 
 
 BASE_URL = "https://api.nhtsa.gov/recalls/recallsByVehicle"
 
-OUTPUT_DIR = Path("data/raw/api")
+OUTPUT_DIR = DATA_DIR / "raw" / "api"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 REQUEST_DELAY = 1.0
@@ -70,7 +72,7 @@ class NHTSAAPICollector:
                 ).isoformat()
             }
 
-        except requests.RequestException as error:
+        except (requests.RequestException, ValueError) as error:
             print(f"API request failed: {error}")
             return None
 
@@ -91,11 +93,7 @@ class NHTSAAPICollector:
             raw_json.encode("utf-8")
         ).hexdigest()
 
-        filename = (
-            f"{year}_{make}_{model}"
-            .lower()
-            .replace(" ", "_")
-        )
+        filename = re.sub(r"[^a-z0-9_-]+", "_", f"{year}_{make}_{model}".lower()).strip("_")
 
         output_file = OUTPUT_DIR / f"{filename}.json"
 
@@ -134,6 +132,7 @@ class NHTSAAPICollector:
             ("Toyota", "Corolla", 2021)
         ]
 
+        saved, failures, total = 0, [], 0
         for make, model, year in vehicles:
 
             result = self.fetch_recalls(
@@ -148,8 +147,16 @@ class NHTSAAPICollector:
                 model,
                 year
             )
+            if result is None:
+                failures.append(f"{year} {make} {model}")
+            else:
+                saved += 1
+                total += len(result["data"].get("results", []))
 
         print("\nNHTSA API collection completed.")
+        if failures:
+            print(f"Failed queries (existing files retained): {', '.join(failures)}")
+        return {"saved": saved, "failures": failures, "records": total}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,21 @@
+"""Small manually labelled development set, not a final professor-approved set."""
+GOLDEN_SET = [
+    {"question": "2020 Honda Accord airbag recall", "relevant": ["12955b7fe54730e785ed", "67258beb0579dd68fab2"]},
+    {"question": "2020 Honda Accord fuel pump recall", "relevant": ["5bd66cd2877c573b1ee3", "a1a2fc7618c9a7f709f4"]},
+    {"question": "2020 Toyota Camry fuel pump recall", "relevant": ["43546474942f61ec5d67"]},
+    {"question": "2021 Honda Civic brake master cylinder recall", "relevant": ["aac35a9326deb8f76112"]},
+    {"question": "2021 Toyota Corolla airbag recall", "relevant": ["4cdc10ad13a446066821"]},
+    {"question": "2020 Ford F-150 rearview camera recall", "relevant": ["2503b3d5412bff2a2b69", "1e9b0204bbc415d2f312"]},
+    {"question": "2020 Ford F-150 headlight recall", "relevant": ["b5f4452c6648c6954c9d", "e000139fa41384c41b01"]},
+    {"question": "2020 Ford F-150 battery cable recall", "relevant": ["e2c4933c8e66881ac30a"]},
+    {"question": "What is automatic emergency braking?", "relevant": ["fr-2024-09054"]},
+    {"question": "What is a tire pressure monitoring system?", "relevant": ["fr-07-3382"]},
+    {"question": "How do seat belt reminders work?", "relevant": ["fr-2024-30340"]},
+    {"question": "What is electronic stability control?", "relevant": ["fr-2015-14127"]},
+    {"question": "2020 Tesla Model 3 recalls", "refusal": "no_evidence"},
+    {"question": "2020 Honda Pilot recalls", "refusal": "no_evidence"},
+    {"question": "When will my brakes fail?", "refusal": "unsupported_prediction"},
+    {"question": "Check recalls for my VIN", "refusal": "vin_lookup"},
+    {"question": "Is my car equipped with AEB?", "refusal": "feature_fitment"},
+    {"question": "How do I cook pasta?", "refusal": "no_evidence"},
+]
