@@ -38,6 +38,8 @@ def test_widget_tpms_explains_mechanism():
     assert not app.error
     answer = app.session_state["messages"][-1]["content"]
     assert "pressure sensor in each wheel" in answer
-    assert "indirect TPMSs" in answer
+    assert "Indirect TPMS uses wheel-speed sensors" in answer
+    assert "Tire Pressure Monitoring System" in answer
+    assert "might be able" not in answer
     assert "Here are relevant passages" not in answer
     assert "not required" not in answer

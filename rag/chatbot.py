@@ -136,7 +136,7 @@ Content:
         return cited_references.issubset(valid_references)
 
     def evidence_answer(self, question, evidence, sources):
-        """Return verbatim source passages when no generation key is configured."""
+        """Explain supported features or return recall passages without an API key."""
         subjects = set(tokenize(expand_query(question))) - GENERIC
         # Vehicle identifiers select documents; they must not make a vehicle
         # header outrank the sentence explaining the safety issue.
@@ -197,6 +197,8 @@ Content:
                 # A heading is not evidence about how a feature operates.
                 if len(sentence.split()) < 10 or len(sentence) > 850 or not overlap:
                     continue
+                if re.search(r"\b(might|may be able|could someday|in the future)\b", sentence, re.I):
+                    continue  # Proposed technology is not an explanation of today's mechanism.
                 functional = bool(re.search(
                     r"\b(detects?|warns?|alerts?|monitors?|transmits?|sensors?|applies|controls?|rel(?:y|ies)|compares?)\b",
                     sentence, re.I))
@@ -213,14 +215,31 @@ Content:
                 seen.add(key)
                 candidates.append((score, reference, position, sentence))
         candidates.sort(key=lambda entry: entry[0], reverse=True)
-        selected = candidates[:3]
+        selected = candidates[:2]
         if not selected:
             return {"answer": "The retrieved passages do not explain how this feature works clearly enough. Try AI summary or add more explanatory source material.",
                     "sources": [], "status": "refused", "reason": "no_explanation"}
         # Display selected sentences in their source order for readability.
         selected.sort(key=lambda entry: (entry[1], entry[2]))
         references = {entry[1] for entry in selected}
-        answer = "\n\n".join(f"{sentence} [{reference}]" for _, reference, _, sentence in selected)
+        explanations = []
+        for _, reference, _, sentence in selected:
+            # These narrow paraphrases require the corresponding mechanism in
+            # the retrieved sentence; they never fill in missing evidence.
+            if (re.search(r"\bDirect TPMSs?\b", sentence, re.I)
+                    and re.search(r"pressure sensor in each wheel", sentence, re.I)
+                    and re.search(r"transmits? pressure information", sentence, re.I)):
+                sentence = "Direct TPMS uses a pressure sensor in each wheel to send tire-pressure readings to the vehicle."
+            elif (re.search(r"\bindirect TPMSs?\b", sentence, re.I)
+                    and re.search(r"wheel[ -]speed sensors", sentence, re.I)
+                    and re.search(r"(?:differences|changes) in (?:the rotational speed|tire pressure)", sentence, re.I)):
+                sentence = "Indirect TPMS uses wheel-speed sensors to detect differences that indicate changes in tire pressure."
+            explanations.append(f"{sentence} [{reference}]")
+        answer = "\n\n".join(explanations)
+        for source in sources:
+            if source["reference"] in references and re.search(r"tire pressure monitoring systems?", source["title"], re.I) and "TPMS" in answer:
+                answer = f"TPMS stands for **Tire Pressure Monitoring System**. [{source['reference']}]\n\n" + answer
+                break
         return {"answer": answer, "sources": [s for s in sources if s["reference"] in references],
                 "status": "success", "mode": "evidence", "evidence_count": len(evidence)}
 

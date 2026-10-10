@@ -70,12 +70,24 @@ def test_feature_explanation_skips_heading_and_uses_later_chunks():
     result = AutoGuideChatbot(checker=checker).answer("How do tire pressure monitoring systems work?")
     assert result["status"] == "success"
     assert "pressure sensor in each wheel" in result["answer"]
-    assert "indirect TPMSs" in result["answer"]
+    assert "Indirect TPMS uses wheel-speed sensors" in result["answer"]
+    assert "Tire Pressure Monitoring System" in result["answer"]
     assert "138;" not in result["answer"]
     assert "falls below the" not in result["answer"]
     assert "not required" not in result["answer"]
     assert len(result["answer"].split()) < 100
     assert len(result["sources"]) >= 1
+
+
+def test_feature_explanation_excludes_speculative_sensor_proposals():
+    chunk = normalize_chunk({"id": "proposal", "document_id": "tpms",
+        "title": "Tire pressure monitoring systems", "source_type": "nhtsa_federal_register",
+        "text": "In concert with TPMS suppliers, tire manufacturers might be able to incorporate TPMS sensors directly into the tires themselves.",
+        "url": "https://www.federalregister.gov/tpms"})
+    checker = EvidenceChecker(retriever=HybridRetriever(chunks=[chunk], enable_dense=False))
+    result = AutoGuideChatbot(checker=checker).answer("What is TPMS?")
+    assert result["status"] == "refused"
+    assert "Direct TPMS uses" not in result["answer"]
 
 
 def fake_client(answer):
